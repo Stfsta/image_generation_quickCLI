@@ -29,6 +29,13 @@ class ConfigSchema:
     default_size: str = "1024x1024"
     language: str = "en"
     reference_dir: str = "./reference_images"
+    multi_ref_mode: str = "direct"
+    collage_max_refs: int = 4
+    collage_layout: str = "auto"
+    collage_canvas: int = 1024
+    collage_annotate: bool = True
+    collage_keep_temp: bool = False
+    collage_prompt_hint: bool = True
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -58,6 +65,8 @@ class ConfigManager:
         "1024x1792",
         "auto",
     }
+    ALLOWED_MULTI_REF_MODES = {"off", "direct", "collage"}
+    ALLOWED_COLLAGE_LAYOUTS = {"auto", "horizontal", "grid"}
     _TEMPLATE = {
         "api_key": "sk-your-api-key",
         "api_base": "https://api.suchuang.vip",
@@ -72,6 +81,13 @@ class ConfigManager:
         "retry_delay": 1.0,
         "default_size": "1024x1024",
         "language": "en",
+        "multi_ref_mode": "direct",
+        "collage_max_refs": 4,
+        "collage_layout": "auto",
+        "collage_canvas": 1024,
+        "collage_annotate": True,
+        "collage_keep_temp": False,
+        "collage_prompt_hint": True,
     }
 
     def __init__(self, config_path: Path | str | None = None) -> None:
@@ -124,6 +140,8 @@ class ConfigManager:
             timeout = int(data.get("timeout", 90))
             max_retries = int(data.get("max_retries", 3))
             retry_delay = float(data.get("retry_delay", 1.0))
+            collage_max_refs = int(data.get("collage_max_refs", self._TEMPLATE["collage_max_refs"]))
+            collage_canvas = int(data.get("collage_canvas", self._TEMPLATE["collage_canvas"]))
         except (ValueError, TypeError) as e:
             raise ConfigValidationError(text(language, "config_invalid_numeric", error=e))
 
@@ -142,6 +160,48 @@ class ConfigManager:
         if raw_language not in ("en", "zh"):
             raise ConfigValidationError(text(language, "config_invalid_language", value=raw_language))
 
+        multi_ref_mode = str(data.get("multi_ref_mode", self._TEMPLATE["multi_ref_mode"])).strip().lower()
+        if multi_ref_mode not in self.ALLOWED_MULTI_REF_MODES:
+            raise ConfigValidationError(
+                text(
+                    language,
+                    "config_invalid_multi_ref_mode",
+                    value=multi_ref_mode,
+                    allowed=", ".join(sorted(self.ALLOWED_MULTI_REF_MODES)),
+                )
+            )
+
+        collage_layout = str(data.get("collage_layout", self._TEMPLATE["collage_layout"])).strip().lower()
+        if collage_layout not in self.ALLOWED_COLLAGE_LAYOUTS:
+            raise ConfigValidationError(
+                text(
+                    language,
+                    "config_invalid_collage_layout",
+                    value=collage_layout,
+                    allowed=", ".join(sorted(self.ALLOWED_COLLAGE_LAYOUTS)),
+                )
+            )
+
+        if collage_max_refs < 2 or collage_max_refs > 9:
+            raise ConfigValidationError(
+                text(language, "config_invalid_collage_max_refs", value=collage_max_refs)
+            )
+
+        if collage_canvas < 512 or collage_canvas > 2048:
+            raise ConfigValidationError(
+                text(language, "config_invalid_collage_canvas", value=collage_canvas)
+            )
+
+        raw_annotate = data.get("collage_annotate", self._TEMPLATE["collage_annotate"])
+        raw_keep_temp = data.get("collage_keep_temp", self._TEMPLATE["collage_keep_temp"])
+        raw_prompt_hint = data.get("collage_prompt_hint", self._TEMPLATE["collage_prompt_hint"])
+        if not isinstance(raw_annotate, bool):
+            raise ConfigValidationError(text(language, "config_invalid_boolean", field="collage_annotate"))
+        if not isinstance(raw_keep_temp, bool):
+            raise ConfigValidationError(text(language, "config_invalid_boolean", field="collage_keep_temp"))
+        if not isinstance(raw_prompt_hint, bool):
+            raise ConfigValidationError(text(language, "config_invalid_boolean", field="collage_prompt_hint"))
+
         return ConfigSchema(
             api_key=api_key,
             api_base=self._derive_api_base(data, language),
@@ -156,6 +216,13 @@ class ConfigManager:
             retry_delay=retry_delay,
             default_size=default_size,
             language=raw_language,
+            multi_ref_mode=multi_ref_mode,
+            collage_max_refs=collage_max_refs,
+            collage_layout=collage_layout,
+            collage_canvas=collage_canvas,
+            collage_annotate=raw_annotate,
+            collage_keep_temp=raw_keep_temp,
+            collage_prompt_hint=raw_prompt_hint,
         )
 
     def load(self) -> ConfigSchema:

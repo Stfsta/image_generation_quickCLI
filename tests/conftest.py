@@ -40,6 +40,13 @@ def make_config_file(tmp_path):
             "retry_delay": 1.0,
             "default_size": "1024x1024",
             "language": "en",
+            "multi_ref_mode": "direct",
+            "collage_max_refs": 4,
+            "collage_layout": "auto",
+            "collage_canvas": 1024,
+            "collage_annotate": True,
+            "collage_keep_temp": False,
+            "collage_prompt_hint": True,
         }
         if overrides:
             cfg.update(overrides)

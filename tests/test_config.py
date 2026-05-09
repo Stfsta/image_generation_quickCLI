@@ -69,3 +69,14 @@ def test_save_updates_persists_language(make_config_file):
     reloaded = ConfigManager(path).load()
     assert updated.language == "zh"
     assert reloaded.language == "zh"
+
+
+def test_multi_ref_mode_accepts_supported_values(make_config_file):
+    for mode in ("off", "direct", "collage"):
+        cfg = ConfigManager(make_config_file({"multi_ref_mode": mode})).load()
+        assert cfg.multi_ref_mode == mode
+
+
+def test_multi_ref_mode_rejects_invalid_value(make_config_file):
+    with pytest.raises(ConfigValidationError):
+        ConfigManager(make_config_file({"multi_ref_mode": "unknown"})).load()

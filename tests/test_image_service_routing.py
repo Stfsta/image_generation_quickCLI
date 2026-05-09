@@ -1,8 +1,11 @@
 from pathlib import Path
 
+from PIL import Image
+
 from image_generator.api_client import DownloadResult, GenerationResult
 from image_generator.config import ConfigManager
 from image_generator.history import HistoryManager
+from image_generator.reference_collage import CollageError
 from image_generator.image_service import ImageGenerationService
 
 
@@ -160,3 +163,55 @@ def test_service_passes_size_priority(make_config_file, tmp_path):
     svc.generate("hello")
     size_from_default = client.calls[0][1]["size"]
     assert size_from_default == "512x512"
+
+
+def test_collage_mode_composes_and_forces_single_edit(make_config_file, tmp_path):
+    config_path = make_config_file(
+        {
+            "history_file": str(tmp_path / "hist.json"),
+            "multi_ref_mode": "collage",
+            "collage_layout": "auto",
+            "collage_canvas": 1024,
+            "collage_max_refs": 4,
+            "collage_annotate": True,
+            "collage_keep_temp": False,
+            "collage_prompt_hint": True,
+        }
+    )
+    cm = ConfigManager(config_path)
+    hm = HistoryManager(tmp_path / "hist.json", max_history=10)
+    client = FakeClient()
+    svc = ImageGenerationService(config_manager=cm, history_manager=hm, api_client=client)
+
+    ref_a = tmp_path / "a.png"
+    ref_b = tmp_path / "b.png"
+    Image.new("RGB", (320, 320), (255, 0, 0)).save(ref_a, format="PNG")
+    Image.new("RGB", (320, 320), (0, 255, 0)).save(ref_b, format="PNG")
+
+    svc.generate("merge style", reference_image=[str(ref_a), str(ref_b)])
+    first_call = client.calls[0]
+    assert first_call[0] == "edit"
+    assert isinstance(first_call[1]["image_path"], str)
+
+
+def test_collage_mode_fallbacks_to_direct_when_composition_failed(make_config_file, tmp_path, monkeypatch):
+    config_path = make_config_file({"history_file": str(tmp_path / "hist.json"), "multi_ref_mode": "collage"})
+    cm = ConfigManager(config_path)
+    hm = HistoryManager(tmp_path / "hist.json", max_history=10)
+    client = FakeClient()
+    svc = ImageGenerationService(config_manager=cm, history_manager=hm, api_client=client)
+
+    def broken_compose(*args, **kwargs):
+        raise CollageError("boom")
+
+    monkeypatch.setattr("image_generator.image_service.compose_reference_collage", broken_compose)
+    ref_a = tmp_path / "fa.png"
+    ref_b = tmp_path / "fb.png"
+    Image.new("RGB", (300, 300), (10, 10, 10)).save(ref_a, format="PNG")
+    Image.new("RGB", (300, 300), (20, 20, 20)).save(ref_b, format="PNG")
+
+    svc.generate("hello", reference_image=[str(ref_a), str(ref_b)])
+    first_call = client.calls[0]
+    assert first_call[0] == "edit"
+    assert isinstance(first_call[1]["image_path"], list)
+    assert len(first_call[1]["image_path"]) == 2

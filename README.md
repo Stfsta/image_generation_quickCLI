@@ -1,4 +1,4 @@
-# Suchuang API Image Generator (e.g. GPT-image-2) v0.2.0
+# Suchuang API Image Generator (e.g. GPT-image-2) v0.2.1
 
 A convenient image generation script based on the Suchuang API proxy station, supporting contextual conversation memory for iterative image refinement. Uses the `gpt-image-2` model, compatible with the OpenAI interface calling method.
 
@@ -23,7 +23,7 @@ A convenient image generation script based on the Suchuang API proxy station, su
 ## Requirements
 
 - Python 3.10 or higher
-- Installed dependency: `requests`
+- Installed dependencies: `requests`, `Pillow`
 
 Install dependencies (recommended):
 
@@ -34,7 +34,7 @@ pip install -r requirements.txt
 Alternatively (minimal/manual):
 
 ```bash
-pip install requests
+pip install requests Pillow
 ```
 
 Optional: install as a package and use the `image-generator` command:
@@ -141,7 +141,7 @@ Set a reference image that will be used for all subsequent generations in the cu
 `Prompt/Command > Add more clouds`  
 `Prompt/Command > ref clear`
 
-#### Style 4: Auto-reference directory (new in v0.2.0)
+#### Style 4: Auto-reference directory (new)
 
 When you do not pass `--ref`, `ref ...`, or `[image:...]`, the CLI scans `reference_images/` and automatically uses all image files (`.png/.jpg/.jpeg/.webp`) as references.
 
@@ -159,6 +159,26 @@ You can also use a URL as the reference image:
 - URL references and non-PNG local references fall back to `/v1/images/generations` via private `image_url` extension behavior.
 - The edits API supports optional `mask`, but the current CLI does not expose a dedicated `--mask` flag yet.
 - Single-image and multi-image references are both supported.
+
+#### Pseudo Multi-Reference Collage Mode (new)
+
+To improve compatibility with platforms that clearly document only single-image edits, you can enable collage mode in `config.json`:
+
+```json
+{
+  "multi_ref_mode": "collage",
+  "collage_max_refs": 4,
+  "collage_layout": "auto",
+  "collage_canvas": 1024,
+  "collage_annotate": true,
+  "collage_prompt_hint": true
+}
+```
+
+- In `collage` mode, multiple local references are merged into one PNG collage and sent to `/v1/images/edits`.
+- If collage creation fails, the app automatically falls back to direct multi-reference behavior.
+- If URL references are present, collage is skipped and direct behavior is used.
+- `multi_ref_mode: off` keeps only the first reference image.
 
 ### 5. Output Size Settings
 
@@ -254,6 +274,13 @@ Adjust the following parameters by editing `config.json`:
 | `max_retries`  | Maximum retry attempts on failure                                                                            | 3                                                |
 | `retry_delay`  | Base retry delay (seconds)                                                                                   | 1.0                                              |
 | `default_size` | Default output size (`256x256`/`512x512`/`1024x1024`/`1536x1024`/`1024x1536`/`1792x1024`/`1024x1792`/`auto`) | `1024x1024`                                      |
+| `multi_ref_mode` | Multi-reference strategy (`off`/`direct`/`collage`)                                                        | `direct`                                         |
+| `collage_max_refs` | Max references used when `multi_ref_mode=collage`                                                        | 4                                                |
+| `collage_layout` | Collage layout strategy (`auto`/`horizontal`/`grid`)                                                        | `auto`                                           |
+| `collage_canvas` | Collage output square canvas size (px)                                                                       | 1024                                             |
+| `collage_annotate` | Add A/B/C labels to collage tiles                                                                          | `true`                                           |
+| `collage_keep_temp` | Keep generated temporary collage files for debugging                                                      | `false`                                          |
+| `collage_prompt_hint` | Auto-inject label mapping hints into prompt                                                            | `true`                                           |
 
 
 Path behavior note: `config.json`, `chat_memory.json`, `generated_images/`, and `reference_images/` are all resolved relative to the current working directory where you run the command.
@@ -266,13 +293,17 @@ Response compatibility note: the client supports both `data[].url` and `data[].b
 ├── image_generator.py          # Compatible entry point (calls CLI in package)
 ├── image_generator/            # Core package
 │   ├── __init__.py
+│   ├── version.py              # Single source of truth for project version
 │   ├── api_client.py           # HTTP client (connection pooling, retry)
 │   ├── cli.py                  # Command-line interface
 │   ├── config.py               # Configuration management & validation
 │   ├── history.py              # Conversation history (thread-safe, atomic writes)
-│   └── image_service.py        # Business logic orchestration
+│   ├── image_service.py        # Business logic orchestration
+│   └── reference_collage.py    # Multi-reference collage composition utility
 ├── docs/                       # Documentation
 │   └── README.zh-CN.md         # Chinese version of this document
+├── scripts/
+│   └── sync_version.py         # Sync visible version strings in docs
 ├── .gitignore                  # Git ignore configuration
 ├── README.md                   # Project documentation (English)
 ├── config.json                 # Configuration file (auto-generated on first run)
@@ -280,6 +311,15 @@ Response compatibility note: the client supports both `data[].url` and `data[].b
 ├── generated_images/           # Generated images (auto-created)
 └── reference_images/           # Optional auto-reference import directory
 ```
+
+### Version Bump Workflow
+
+- Single source of truth: `image_generator/version.py` (`__version__`)
+- Update once there, then sync display strings:
+  ```bash
+  python scripts/sync_version.py
+  ```
+- This keeps CLI banner and package version source aligned, while updating visible version strings in docs/snapshot with one command.
 
 ## FAQ
 

@@ -1,4 +1,4 @@
-# 速创API 图像生成工具（e.g. GPT-image-2）v0.2.0
+# 速创API 图像生成工具（e.g. GPT-image-2）v0.2.1
 
 基于速创API中转站的便捷图像生成脚本，支持对话上下文记忆，方便连续调整生成结果。模型使用 `gpt-image-2`，兼容 OpenAI 接口调用方式。
 
@@ -23,7 +23,7 @@
 ## 环境要求
 
 - Python 3.10 或更高版本
-- 已安装依赖库：`requests`
+- 已安装依赖库：`requests`、`Pillow`
 
 安装依赖（推荐）：
 
@@ -34,7 +34,7 @@ pip install -r requirements.txt
 或使用最小手动安装：
 
 ```bash
-pip install requests
+pip install requests Pillow
 ```
 
 可选：按包方式安装后使用 `image-generator` 命令启动：
@@ -141,7 +141,7 @@ python image_generator.py
 `提示词/命令 > 多加一些云`  
 `提示词/命令 > ref clear`
 
-#### 方式四：自动参考图目录（v0.2.0 新增）
+#### 方式四：自动参考图目录（新增）
 
 当你没有显式使用 `--ref`、`ref ...` 或 `[image:...]` 时，CLI 会自动扫描 `reference_images/`，并将其中所有图片文件（`.png/.jpg/.jpeg/.webp`）作为参考图。
 
@@ -159,6 +159,26 @@ python image_generator.py
 - URL 参考图与非 PNG 本地参考图会回退到 `/v1/images/generations` 的私有 `image_url` 扩展路径。
 - edits 接口支持可选 `mask`，但当前 CLI 暂未提供专用 `--mask` 参数。
 - 每次请求支持单张或多张参考图。
+
+#### 伪多参考图拼接模式（新增）
+
+为兼容“文档明确仅支持单图编辑”的平台路径，可在 `config.json` 中启用拼接模式：
+
+```json
+{
+  "multi_ref_mode": "collage",
+  "collage_max_refs": 4,
+  "collage_layout": "auto",
+  "collage_canvas": 1024,
+  "collage_annotate": true,
+  "collage_prompt_hint": true
+}
+```
+
+- `collage` 模式会把多张本地参考图拼接为一张 PNG，再走 `/v1/images/edits`。
+- 拼接失败时会自动回退到当前直接多图传递行为。
+- 参考图中含 URL 时会跳过拼接并回退到直接模式。
+- `multi_ref_mode: off` 会仅使用第一张参考图。
 
 ### 5. 输出尺寸设置
 
@@ -254,6 +274,13 @@ service.generate("美丽的日落", size="1792x1024")
 | `max_retries`  | 失败时最大重试次数                                                                                      | 3                                                |
 | `retry_delay`  | 重试基础延迟（秒）                                                                                      | 1.0                                              |
 | `default_size` | 默认输出尺寸（`256x256`/`512x512`/`1024x1024`/`1536x1024`/`1024x1536`/`1792x1024`/`1024x1792`/`auto`） | `1024x1024`                                      |
+| `multi_ref_mode` | 多参考图策略（`off`/`direct`/`collage`）                                                              | `direct`                                         |
+| `collage_max_refs` | `multi_ref_mode=collage` 时最多参与拼接的参考图数量                                                   | 4                                                |
+| `collage_layout` | 拼图布局策略（`auto`/`horizontal`/`grid`）                                                             | `auto`                                           |
+| `collage_canvas` | 拼图输出正方形画布尺寸（像素）                                                                          | 1024                                             |
+| `collage_annotate` | 是否在拼图子图上叠加 A/B/C 标记                                                                       | `true`                                           |
+| `collage_keep_temp` | 是否保留拼图临时文件（调试用）                                                                       | `false`                                          |
+| `collage_prompt_hint` | 是否自动在提示词中附加拼图标签映射说明                                                            | `true`                                           |
 
 
 路径说明：`config.json`、`chat_memory.json`、`generated_images/`、`reference_images/` 都是相对于你执行命令时的当前工作目录解析。
@@ -266,13 +293,17 @@ service.generate("美丽的日落", size="1792x1024")
 ├── image_generator.py          # 兼容入口（调用包内 CLI）
 ├── image_generator/            # 核心包
 │   ├── __init__.py
+│   ├── version.py              # 项目版本唯一来源
 │   ├── api_client.py           # HTTP 客户端（连接池、重试）
 │   ├── cli.py                  # 命令行交互界面
 │   ├── config.py               # 配置管理与验证
 │   ├── history.py              # 对话历史管理（线程安全、原子写）
-│   └── image_service.py        # 业务逻辑编排
+│   ├── image_service.py        # 业务逻辑编排
+│   └── reference_collage.py    # 多参考图拼接工具
 ├── docs/                       # 文档目录
 │   └── README.zh-CN.md         # 中文版本说明文档
+├── scripts/
+│   └── sync_version.py         # 同步文档版本显示文本
 ├── .gitignore                  # Git 忽略配置
 ├── README.md                   # 项目文档（英文）
 ├── config.json                 # 配置文件（存放密钥等，首次运行自动生成）
@@ -280,6 +311,15 @@ service.generate("美丽的日落", size="1792x1024")
 ├── generated_images/           # 生成的图片（自动创建）
 └── reference_images/           # 可选自动参考图导入目录
 ```
+
+### 版本升级流程（高效）
+
+- 单一版本来源：`image_generator/version.py` 中的 `__version__`
+- 只改这一处后，执行：
+  ```bash
+  python scripts/sync_version.py
+  ```
+- 可一次同步 README 与快照中的可见版本文本，降低手工遗漏风险。
 
 ## 常见问题
 

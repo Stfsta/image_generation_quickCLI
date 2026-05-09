@@ -10,6 +10,7 @@ from typing import Any
 from .config import ConfigManager, ConfigSchema
 from .history import HistoryManager
 from .api_client import ImageAPIClient, GenerationResult, DownloadResult
+from .reference_collage import CollageError, CollageOptions, compose_reference_collage
 from .i18n import text
 
 
@@ -78,6 +79,17 @@ class ImageGenerationService:
             prompt = re.sub(size_pattern, '', prompt).strip()
         
         return prompt, reference_image, parsed_size
+
+    def _is_url_reference(self, value: str) -> bool:
+        return value.startswith(("http://", "https://"))
+
+    def _build_collage_hint(self, mapping: list[tuple[str, str]]) -> str:
+        if not mapping:
+            return ""
+        pairs = ", ".join([f"{label}={Path(path).name}" for label, path in mapping])
+        if self.language == "zh":
+            return f"参考拼贴图标注映射：{pairs}。请按这些标注理解多图关系并进行编辑。"
+        return f"Reference collage label mapping: {pairs}. Use these labels when applying cross-image edits."
 
     @property
     def config(self) -> ConfigSchema:
@@ -163,7 +175,7 @@ class ImageGenerationService:
         session_id: str = "default",
         size: str | None = None,
         n: int = 1,
-        reference_image: str | None = None,
+        reference_image: str | list[str] | None = None,
         **extra_params: Any
     ) -> str | None:
         """
@@ -190,6 +202,44 @@ class ImageGenerationService:
         else:
             references = []
 
+        temp_collage_path: Path | None = None
+        if len(references) > 1:
+            mode = self.config.multi_ref_mode
+            if mode == "off":
+                print(text(self.language, "service_multi_ref_off", count=len(references)))
+                references = [references[0]]
+            elif mode == "collage":
+                if any(self._is_url_reference(ref) for ref in references):
+                    print(text(self.language, "service_collage_skip_url_ref"))
+                else:
+                    try:
+                        collage_result = compose_reference_collage(
+                            references,
+                            CollageOptions(
+                                max_refs=self.config.collage_max_refs,
+                                layout=self.config.collage_layout,
+                                canvas=self.config.collage_canvas,
+                                annotate=self.config.collage_annotate,
+                                max_bytes=self.client.MAX_EDIT_IMAGE_BYTES,
+                            ),
+                        )
+                        temp_collage_path = Path(collage_result.path)
+                        references = [str(temp_collage_path)]
+                        if self.config.collage_prompt_hint and collage_result.label_mapping:
+                            parsed_prompt = f"{self._build_collage_hint(collage_result.label_mapping)}\n{parsed_prompt}"
+                        print(
+                            text(
+                                self.language,
+                                "service_collage_composed",
+                                used=collage_result.used_count,
+                                omitted=collage_result.omitted_count,
+                                path=collage_result.path,
+                                bytes=collage_result.file_size,
+                            )
+                        )
+                    except CollageError as e:
+                        print(text(self.language, "service_collage_failed_fallback", error=e))
+
         final_size = size or parsed_size or self.config.default_size
 
         full_prompt = self.history.build_context_prompt(parsed_prompt, session_id, self.language)
@@ -204,24 +254,31 @@ class ImageGenerationService:
         else:
             print(text(self.language, "service_prompt", prompt=truncated))
 
-        if references and self._should_use_edits(references):
-            gen_result: GenerationResult = self.client.edit(
-                prompt=full_prompt,
-                image_path=references if len(references) > 1 else references[0],
-                size=final_size,
-                n=n,
-                **extra_params,
-            )
-        else:
-            if references and any(not ref.startswith(("http://", "https://")) for ref in references):
-                print(text(self.language, "service_info_fallback_to_generations"))
-            gen_result = self.client.generate(
-                prompt=full_prompt,
-                size=final_size,
-                n=n,
-                reference_image=references if len(references) > 1 else (references[0] if references else None),
-                **extra_params,
-            )
+        try:
+            if references and self._should_use_edits(references):
+                gen_result: GenerationResult = self.client.edit(
+                    prompt=full_prompt,
+                    image_path=references if len(references) > 1 else references[0],
+                    size=final_size,
+                    n=n,
+                    **extra_params,
+                )
+            else:
+                if references and any(not ref.startswith(("http://", "https://")) for ref in references):
+                    print(text(self.language, "service_info_fallback_to_generations"))
+                gen_result = self.client.generate(
+                    prompt=full_prompt,
+                    size=final_size,
+                    n=n,
+                    reference_image=references if len(references) > 1 else (references[0] if references else None),
+                    **extra_params,
+                )
+        finally:
+            if temp_collage_path and temp_collage_path.exists() and not self.config.collage_keep_temp:
+                try:
+                    temp_collage_path.unlink()
+                except OSError:
+                    pass
 
         if not gen_result.success:
             print(text(self.language, "service_error", error=gen_result.error_message))

@@ -4,13 +4,17 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "image-generator"
-version = "0.2.0"
 description = "Suchuang API image generation CLI with conversation context memory"
 readme = "README.md"
 requires-python = ">=3.10"
+dynamic = ["version"]
 dependencies = [
   "requests>=2.31",
+  "Pillow>=10.0",
 ]
 
 [project.scripts]
 image-generator = "image_generator.cli:main"
+
+[tool.setuptools.dynamic]
+version = {attr = "image_generator.version.__version__"}
