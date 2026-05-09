@@ -34,7 +34,12 @@ class FakeClient:
 
 
 def _make_service(make_config_file, tmp_path, fake_client: FakeClient):
-    config_path = make_config_file({"history_file": str(tmp_path / "hist.json")})
+    config_path = make_config_file(
+        {
+            "history_file": str(tmp_path / "hist.json"),
+            "reference_dir": str(tmp_path / "reference_images"),
+        }
+    )
     cm = ConfigManager(config_path)
     hm = HistoryManager(tmp_path / "hist.json", max_history=10)
     return ImageGenerationService(config_manager=cm, history_manager=hm, api_client=fake_client)
@@ -75,6 +80,47 @@ def test_local_png_over_4mb_falls_back_generate(make_config_file, tmp_path):
     svc = _make_service(make_config_file, tmp_path, client)
     svc.generate("hello", reference_image=str(big_png))
     assert client.calls[0][0] == "generate"
+
+
+def test_auto_reference_dir_empty_keeps_text_to_image(make_config_file, tmp_path):
+    client = FakeClient()
+    svc = _make_service(make_config_file, tmp_path, client)
+    svc.generate("hello")
+    first_call = client.calls[0]
+    assert first_call[0] == "generate"
+    assert first_call[1]["reference_image"] is None
+
+
+def test_auto_reference_dir_uses_all_images(make_config_file, tmp_path):
+    ref_dir = tmp_path / "reference_images"
+    ref_dir.mkdir(parents=True, exist_ok=True)
+    (ref_dir / "a.png").write_bytes(b"\x89PNG\r\n\x1a\na")
+    (ref_dir / "b.jpg").write_bytes(b"\xff\xd8\xffb")
+
+    client = FakeClient()
+    svc = _make_service(make_config_file, tmp_path, client)
+    svc.generate("hello")
+
+    first_call = client.calls[0]
+    assert first_call[0] == "generate"
+    assert isinstance(first_call[1]["reference_image"], list)
+    assert len(first_call[1]["reference_image"]) == 2
+
+
+def test_auto_reference_dir_all_small_png_uses_edit(make_config_file, tmp_path):
+    ref_dir = tmp_path / "reference_images"
+    ref_dir.mkdir(parents=True, exist_ok=True)
+    (ref_dir / "a.png").write_bytes(b"\x89PNG\r\n\x1a\na")
+    (ref_dir / "b.png").write_bytes(b"\x89PNG\r\n\x1a\nb")
+
+    client = FakeClient()
+    svc = _make_service(make_config_file, tmp_path, client)
+    svc.generate("hello")
+
+    first_call = client.calls[0]
+    assert first_call[0] == "edit"
+    assert isinstance(first_call[1]["image_path"], list)
+    assert len(first_call[1]["image_path"]) == 2
 
 
 def test_service_prefers_b64_save_over_download(make_config_file, tmp_path):

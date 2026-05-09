@@ -17,6 +17,8 @@ import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
+from .i18n import normalize_language, text
+
 
 @dataclass
 class GenerationResult:
@@ -66,6 +68,7 @@ class ImageAPIClient:
         max_retries: int = 3,
         retry_delay: float = 1.0,
         base_url: str | None = None,
+        language: str = "en",
     ) -> None:
         self._api_key = api_key
         self._api_base = self._normalize_api_base(api_base or base_url or "https://api.suchuang.vip")
@@ -73,6 +76,7 @@ class ImageAPIClient:
         self._timeout = timeout
         self._max_retries = max_retries
         self._retry_delay = retry_delay
+        self._language = normalize_language(language)
 
         self._session = requests.Session()
         self._session.headers.update({"Authorization": f"Bearer {api_key}"})
@@ -86,6 +90,9 @@ class ImageAPIClient:
         adapter = HTTPAdapter(max_retries=retry_strategy, pool_connections=10, pool_maxsize=10)
         self._session.mount("https://", adapter)
         self._session.mount("http://", adapter)
+
+    def set_language(self, language: str) -> None:
+        self._language = normalize_language(language)
 
     def _normalize_api_base(self, raw: str) -> str:
         """
@@ -109,12 +116,12 @@ class ImageAPIClient:
         """
         file_path = Path(image_path)
         if not file_path.is_file():
-            raise ImageAPIError(f"Reference image file does not exist: {file_path}")
+            raise ImageAPIError(text(self._language, "api_ref_file_missing", path=file_path))
 
         try:
             image_data = file_path.read_bytes()
         except OSError as e:
-            raise ImageAPIError(f"Failed to read reference image file: {e}") from e
+            raise ImageAPIError(text(self._language, "api_ref_read_failed", error=e)) from e
 
         ext = file_path.suffix.lower()
         if ext in (".jpg", ".jpeg"):
@@ -124,9 +131,7 @@ class ImageAPIClient:
         elif ext == ".webp":
             mime_type = "image/webp"
         else:
-            raise ImageAPIError(
-                f"Unsupported image format '{ext}'. Supported formats: .jpg, .jpeg, .png, .webp"
-            )
+            raise ImageAPIError(text(self._language, "api_unsupported_format", ext=ext))
 
         encoded = base64.b64encode(image_data).decode("utf-8")
         return f"data:{mime_type};base64,{encoded}"
@@ -137,7 +142,12 @@ class ImageAPIClient:
         except ValueError:
             return GenerationResult(
                 success=False,
-                error_message=f"API returned non-JSON response / API 返回非 JSON 响应: HTTP {resp.status_code} - {resp.text}",
+                error_message=text(
+                    self._language,
+                    "api_non_json",
+                    status_code=resp.status_code,
+                    body=resp.text,
+                ),
                 status_code=resp.status_code,
             )
 
@@ -145,7 +155,7 @@ class ImageAPIClient:
         if not images:
             return GenerationResult(
                 success=False,
-                error_message="API returned no image data / API 未返回任何图片数据。",
+                error_message=text(self._language, "api_no_data"),
                 status_code=resp.status_code,
             )
 
@@ -163,7 +173,7 @@ class ImageAPIClient:
 
         return GenerationResult(
             success=False,
-            error_message="API image payload missing url and b64_json / API 返回的图片数据中未包含 url 或 b64_json。",
+            error_message=text(self._language, "api_missing_url_b64"),
             status_code=resp.status_code,
         )
 
@@ -173,7 +183,7 @@ class ImageAPIClient:
         *,
         json_payload: dict[str, Any] | None = None,
         data_payload: dict[str, Any] | None = None,
-        files_payload: dict[str, tuple[str, BinaryIO, str]] | None = None,
+        files_payload: Any = None,
         headers: dict[str, str] | None = None,
     ) -> requests.Response | None:
         last_exception: Exception | None = None
@@ -214,7 +224,7 @@ class ImageAPIClient:
         prompt: str,
         size: str = "1024x1024",
         n: int = 1,
-        reference_image: str | None = None,
+        reference_image: str | list[str] | None = None,
         **extra_params: Any,
     ) -> GenerationResult:
         """
@@ -231,14 +241,26 @@ class ImageAPIClient:
             **extra_params,
         }
 
-        if reference_image:
-            if reference_image.startswith(("http://", "https://")):
-                payload["image_url"] = reference_image
-            else:
-                try:
-                    payload["image_url"] = self._encode_image(reference_image)
-                except ImageAPIError as e:
-                    return GenerationResult(success=False, error_message=f"Failed to process reference image / 处理参考图片失败: {e}")
+        references: list[str] = []
+        if isinstance(reference_image, str):
+            references = [reference_image]
+        elif isinstance(reference_image, list):
+            references = [item for item in reference_image if item]
+
+        if references:
+            encoded_refs: list[str] = []
+            for ref in references:
+                if ref.startswith(("http://", "https://")):
+                    encoded_refs.append(ref)
+                else:
+                    try:
+                        encoded_refs.append(self._encode_image(ref))
+                    except ImageAPIError as e:
+                        return GenerationResult(
+                            success=False,
+                            error_message=text(self._language, "api_ref_process_failed", error=e),
+                        )
+            payload["image_url"] = encoded_refs[0] if len(encoded_refs) == 1 else encoded_refs
 
         try:
             resp = self._post_with_retry(
@@ -247,17 +269,28 @@ class ImageAPIClient:
                 headers={"Content-Type": "application/json"},
             )
         except requests.Timeout as e:
-            return GenerationResult(success=False, error_message=f"Request timeout / 请求超时 (已重试 {self._max_retries} 次): {e}")
+            return GenerationResult(
+                success=False,
+                error_message=text(self._language, "api_request_timeout", retries=self._max_retries, error=e),
+            )
         except requests.RequestException as e:
-            return GenerationResult(success=False, error_message=f"Network request error / 网络请求异常 (已重试 {self._max_retries} 次): {e}")
+            return GenerationResult(
+                success=False,
+                error_message=text(self._language, "api_network_error", retries=self._max_retries, error=e),
+            )
 
         if resp is None:
-            return GenerationResult(success=False, error_message="Unknown error: no response / 未知错误：未收到响应")
+            return GenerationResult(success=False, error_message=text(self._language, "api_unknown_no_response"))
 
         if resp.status_code != 200:
             return GenerationResult(
                 success=False,
-                error_message=f"API request failed / API 请求失败: HTTP {resp.status_code} - {resp.text}",
+                error_message=text(
+                    self._language,
+                    "api_request_failed",
+                    status_code=resp.status_code,
+                    body=resp.text,
+                ),
                 status_code=resp.status_code,
             )
 
@@ -266,23 +299,29 @@ class ImageAPIClient:
     def _validate_png_for_edit(self, image_path: str, field_name: str) -> Path:
         file_path = Path(image_path)
         if not file_path.is_file():
-            raise ImageAPIError(f"{field_name} file does not exist: {file_path}")
+            raise ImageAPIError(text(self._language, "api_file_missing", field=field_name, path=file_path))
         if file_path.suffix.lower() != ".png":
-            raise ImageAPIError(f"{field_name} must be PNG: {file_path}")
+            raise ImageAPIError(text(self._language, "api_file_must_png", field=field_name, path=file_path))
         try:
             file_size = file_path.stat().st_size
         except OSError as e:
-            raise ImageAPIError(f"Cannot stat {field_name} file: {e}") from e
+            raise ImageAPIError(text(self._language, "api_file_stat_error", field=field_name, error=e)) from e
         if file_size > self.MAX_EDIT_IMAGE_BYTES:
             raise ImageAPIError(
-                f"{field_name} file is too large ({file_size} bytes). Must be <= {self.MAX_EDIT_IMAGE_BYTES} bytes."
+                text(
+                    self._language,
+                    "api_file_too_large",
+                    field=field_name,
+                    size=file_size,
+                    max_size=self.MAX_EDIT_IMAGE_BYTES,
+                )
             )
         return file_path
 
     def edit(
         self,
         prompt: str,
-        image_path: str,
+        image_path: str | list[str],
         size: str = "1024x1024",
         n: int = 1,
         mask_path: str | None = None,
@@ -295,7 +334,11 @@ class ImageAPIClient:
         通过 `/v1/images/edits` 以 multipart/form-data 编辑图像。
         """
         try:
-            image_file = self._validate_png_for_edit(image_path, "image")
+            image_paths = [image_path] if isinstance(image_path, str) else [p for p in image_path if p]
+            image_files = [
+                self._validate_png_for_edit(path, f"image[{index}]")
+                for index, path in enumerate(image_paths)
+            ]
             mask_file = self._validate_png_for_edit(mask_path, "mask") if mask_path else None
         except ImageAPIError as e:
             return GenerationResult(success=False, error_message=str(e))
@@ -313,16 +356,18 @@ class ImageAPIClient:
             if value is not None:
                 data_payload[key] = value
 
-        image_handle: BinaryIO | None = None
+        image_handles: list[BinaryIO] = []
         mask_handle: BinaryIO | None = None
         try:
-            image_handle = image_file.open("rb")
-            files_payload: dict[str, tuple[str, BinaryIO, str]] = {
-                "image": (image_file.name, image_handle, "image/png")
-            }
+            files_payload: list[tuple[str, tuple[str, BinaryIO, str]]] = []
+            for index, image_file in enumerate(image_files):
+                image_handle = image_file.open("rb")
+                image_handles.append(image_handle)
+                key = "image" if index == 0 else "image[]"
+                files_payload.append((key, (image_file.name, image_handle, "image/png")))
             if mask_file is not None:
                 mask_handle = mask_file.open("rb")
-                files_payload["mask"] = (mask_file.name, mask_handle, "image/png")
+                files_payload.append(("mask", (mask_file.name, mask_handle, "image/png")))
 
             try:
                 resp = self._post_with_retry(
@@ -331,22 +376,33 @@ class ImageAPIClient:
                     files_payload=files_payload,
                 )
             except requests.Timeout as e:
-                return GenerationResult(success=False, error_message=f"Request timeout / 请求超时 (已重试 {self._max_retries} 次): {e}")
+                return GenerationResult(
+                    success=False,
+                    error_message=text(self._language, "api_request_timeout", retries=self._max_retries, error=e),
+                )
             except requests.RequestException as e:
-                return GenerationResult(success=False, error_message=f"Network request error / 网络请求异常 (已重试 {self._max_retries} 次): {e}")
+                return GenerationResult(
+                    success=False,
+                    error_message=text(self._language, "api_network_error", retries=self._max_retries, error=e),
+                )
         finally:
-            if image_handle:
+            for image_handle in image_handles:
                 image_handle.close()
             if mask_handle:
                 mask_handle.close()
 
         if resp is None:
-            return GenerationResult(success=False, error_message="Unknown error: no response / 未知错误：未收到响应")
+            return GenerationResult(success=False, error_message=text(self._language, "api_unknown_no_response"))
 
         if resp.status_code != 200:
             return GenerationResult(
                 success=False,
-                error_message=f"API request failed / API 请求失败: HTTP {resp.status_code} - {resp.text}",
+                error_message=text(
+                    self._language,
+                    "api_request_failed",
+                    status_code=resp.status_code,
+                    body=resp.text,
+                ),
                 status_code=resp.status_code,
             )
 
@@ -358,7 +414,7 @@ class ImageAPIClient:
         从 URL 下载图片。
         """
         if not url:
-            return DownloadResult(success=False, error_message="Download URL is empty / 下载 URL 为空")
+            return DownloadResult(success=False, error_message=text(self._language, "api_download_url_empty"))
 
         try:
             if not filename:
@@ -370,9 +426,9 @@ class ImageAPIClient:
                 filepath.write_bytes(resp.content)
             return DownloadResult(success=True, filepath=str(filepath))
         except requests.RequestException as e:
-            return DownloadResult(success=False, error_message=f"Image download failed / 图片下载失败: {e}")
+            return DownloadResult(success=False, error_message=text(self._language, "api_download_failed", error=e))
         except OSError as e:
-            return DownloadResult(success=False, error_message=f"File save failed / 文件保存失败: {e}")
+            return DownloadResult(success=False, error_message=text(self._language, "api_save_failed", error=e))
 
     def save_b64(self, image_b64: str, image_dir: Path, filename: str | None = None) -> DownloadResult:
         """
@@ -380,7 +436,7 @@ class ImageAPIClient:
         将 base64 图片数据保存到本地文件。
         """
         if not image_b64:
-            return DownloadResult(success=False, error_message="b64_json is empty / b64_json 内容为空")
+            return DownloadResult(success=False, error_message=text(self._language, "api_b64_empty"))
 
         try:
             if not filename:
@@ -393,9 +449,9 @@ class ImageAPIClient:
             filepath.write_bytes(decoded)
             return DownloadResult(success=True, filepath=str(filepath))
         except (binascii.Error, ValueError) as e:
-            return DownloadResult(success=False, error_message=f"b64_json decode failed / b64_json 解码失败: {e}")
+            return DownloadResult(success=False, error_message=text(self._language, "api_b64_decode_failed", error=e))
         except OSError as e:
-            return DownloadResult(success=False, error_message=f"File save failed / 文件保存失败: {e}")
+            return DownloadResult(success=False, error_message=text(self._language, "api_save_failed", error=e))
 
     def close(self) -> None:
         """Clean up session resources.

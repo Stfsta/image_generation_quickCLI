@@ -32,12 +32,14 @@ def make_config_file(tmp_path):
             "base_url": "https://api.suchuang.vip/v1/images/generations",
             "model": "gpt-image-2",
             "image_dir": str(tmp_path / "generated_images"),
+            "reference_dir": str(tmp_path / "reference_images"),
             "history_file": str(tmp_path / "chat_memory.json"),
             "max_history": 10,
             "timeout": 90,
             "max_retries": 3,
             "retry_delay": 1.0,
             "default_size": "1024x1024",
+            "language": "en",
         }
         if overrides:
             cfg.update(overrides)

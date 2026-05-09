@@ -7,7 +7,7 @@ def test_generation_response_contract_url_or_b64_required(valid_api_key):
     client = ImageAPIClient(api_key=valid_api_key, api_base="https://api.suchuang.vip")
     result = client._parse_generation_response(FakeResponse(200, {"data": [{}]}))
     assert result.success is False
-    assert "url 或 b64_json" in (result.error_message or "")
+    assert "url and b64_json" in (result.error_message or "")
 
 
 def test_config_backward_compat_legacy_base_url(make_config_file):

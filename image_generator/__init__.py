@@ -4,7 +4,7 @@ Portable Image Generation Tool - Modular Package
 基于速创API中转站的便捷图像生成工具，支持对话上下文记忆。
 """
 
-__version__ = "0.1.1"
+__version__ = "0.2.0"
 __all__ = ["ConfigManager", "HistoryManager", "ImageAPIClient", "ImageGenerationService"]
 
 from .config import ConfigManager

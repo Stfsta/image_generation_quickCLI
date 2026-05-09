@@ -1,4 +1,4 @@
-# Suchuang API Image Generator (e.g. GPT-image-2) v0.1.1
+# Suchuang API Image Generator (e.g. GPT-image-2) v0.2.0
 
 A convenient image generation script based on the Suchuang API proxy station, supporting contextual conversation memory for iterative image refinement. Uses the `gpt-image-2` model, compatible with the OpenAI interface calling method.
 
@@ -16,6 +16,8 @@ A convenient image generation script based on the Suchuang API proxy station, su
 - **Connection pooling & auto-retry**: HTTP session reuse with exponential backoff retry
 - **Atomic history file writes**: prevents data corruption
 - **Safer history persistence**: lock-protected history updates with atomic file writes
+- **Runtime language switch**: `lang en|zh` persists in `config.json`
+- **Portable auto-reference import**: put images into `reference_images/` and they are auto-detected when no explicit ref is provided
 - Lightweight, readable code structure, easy for secondary development
 
 ## Requirements
@@ -80,7 +82,9 @@ On first run, a `config.json` file will be automatically generated in the curren
   "api_base": "https://api.suchuang.vip",
   "base_url": "https://api.suchuang.vip/v1/images/generations",
   "model": "gpt-image-2",
+  "language": "en",
   "image_dir": "./generated_images",
+  "reference_dir": "./reference_images",
   "history_file": "chat_memory.json",
   "max_history": 10,
   "timeout": 90,
@@ -96,15 +100,11 @@ Save and run again.
 
 After successful startup, the command line prompt looks like this:
 
-```
-Prompt/Command | 提示词/命令 >
-```
+`Prompt/Command >` in English mode, and `提示词/命令 >` in Chinese mode.
 
 Simply enter an English or Chinese description and press Enter to generate an image. For example:
 
-```
-Prompt/Command | 提示词/命令 > A cute cat wearing a wizard hat
-```
+`Prompt/Command > A cute cat wearing a wizard hat`
 
 After generation is complete, the image will be saved in the `generated_images/` folder, with a filename containing a timestamp.
 
@@ -112,55 +112,53 @@ After generation is complete, the image will be saved in the `generated_images/`
 
 The script remembers previous conversation content. You can continuously input new requirements, and the AI will combine the historical description to generate new images. For example:
 
-```
-Prompt/Command | 提示词/命令 > Change the cat to golden fur
-```
+`Prompt/Command > Change the cat to golden fur`
 
 The script will automatically concatenate the previous generation result (simplified description) with the new requirement to form a complete prompt for resubmission.
 
 ### 4. Image-to-Image Generation
 
-The `gpt-image-2` model supports image-to-image generation. You can provide a reference image along with your text prompt to guide the generation process. The script supports **three syntax styles**:
+The `gpt-image-2` model supports image-to-image generation. You can provide reference images along with your prompt. The script supports **four styles**:
 
 #### Style 1: Inline syntax (recommended)
 
 Include the image reference directly in your prompt:
 
-```
-Prompt/Command | 提示词/命令 > [image:/path/to/reference_image.jpg] Make the background a sunset scene
-```
+`Prompt/Command > [image:/path/to/reference_image.jpg] Make the background a sunset scene`
 
 #### Style 2: Command-line parameter syntax
 
 Use `--ref` before your prompt:
 
-```
-Prompt/Command | 提示词/命令 > --ref /path/to/reference_image.jpg Make the background a sunset scene
-```
+`Prompt/Command > --ref /path/to/reference_image.jpg Make the background a sunset scene`
 
 #### Style 3: Session-level reference image
 
 Set a reference image that will be used for all subsequent generations in the current session until you run `ref clear` or switch sessions:
 
-```
-Prompt/Command | 提示词/命令 > ref /path/to/reference_image.jpg
-Prompt/Command | 提示词/命令 > Make the background a sunset scene
-Prompt/Command | 提示词/命令 > Add more clouds
-Prompt/Command | 提示词/命令 > ref clear
-```
+`Prompt/Command > ref /path/to/reference_image.jpg`  
+`Prompt/Command > Make the background a sunset scene`  
+`Prompt/Command > Add more clouds`  
+`Prompt/Command > ref clear`
+
+#### Style 4: Auto-reference directory (new in v0.2.0)
+
+When you do not pass `--ref`, `ref ...`, or `[image:...]`, the CLI scans `reference_images/` and automatically uses all image files (`.png/.jpg/.jpeg/.webp`) as references.
+
+- If all detected files are local PNG and <= 4MB, the request uses `/v1/images/edits`.
+- Otherwise it falls back to `/v1/images/generations`.
+- If the folder is empty (or does not exist), generation works as text-only by default.
 
 You can also use a URL as the reference image:
 
-```
-Prompt/Command | 提示词/命令 > --ref https://example.com/reference.png Add snow effect to this image
-```
+`Prompt/Command > --ref https://example.com/reference.png Add snow effect to this image`
 
 **Notes for image-to-image:**
 
 - Local PNG references (`.png`, <= 4MB) are sent to `/v1/images/edits` as `multipart/form-data`.
 - URL references and non-PNG local references fall back to `/v1/images/generations` via private `image_url` extension behavior.
 - The edits API supports optional `mask`, but the current CLI does not expose a dedicated `--mask` flag yet.
-- One reference image is supported per generation request.
+- Single-image and multi-image references are both supported.
 
 ### 5. Output Size Settings
 
@@ -170,15 +168,11 @@ You can control the output image dimensions through the following methods:
 
 Use one of the supported size formats directly in your prompt:
 
-```
-Prompt/Command | 提示词/命令 > [size:1792x1024] A panoramic landscape view
-```
+`Prompt/Command > [size:1792x1024] A panoramic landscape view`
 
 You can also use temporary CLI flag syntax:
 
-```
-Prompt/Command | 提示词/命令 > --size 1024x1792 A portrait fantasy character
-```
+`Prompt/Command > --size 1024x1792 A portrait fantasy character`
 
 Supported size values (union of official model capabilities):
 
@@ -231,6 +225,8 @@ service.generate("A beautiful sunset", size="1792x1024")
 | `session <id>`        | Switch to specified session ID      |
 | `ref <path/url>`      | Set session-level reference image   |
 | `ref clear`           | Clear session-level reference image |
+| `lang [en/zh]`        | Show or switch CLI display language |
+| `language [en/zh]`    | Alias of `lang`                     |
 | `help`                | Show help information               |
 
 
@@ -249,7 +245,9 @@ Adjust the following parameters by editing `config.json`:
 | `api_base`     | API host (recommended)                                                                                       | `https://api.suchuang.vip`                       |
 | `base_url`     | Legacy full endpoint URL (compatible)                                                                        | `https://api.suchuang.vip/v1/images/generations` |
 | `model`        | Model name to use                                                                                            | `gpt-image-2`                                    |
+| `language`     | CLI display language (`en` / `zh`)                                                                           | `en`                                             |
 | `image_dir`    | Image save directory                                                                                         | `./generated_images`                             |
+| `reference_dir`| Auto-reference directory scanned when no explicit reference is given                                         | `./reference_images`                             |
 | `max_history`  | Maximum dialogue rounds to keep                                                                              | 10                                               |
 | `history_file` | Conversation history storage file                                                                            | `chat_memory.json`                               |
 | `timeout`      | API request timeout (seconds)                                                                                | 90                                               |
@@ -258,7 +256,7 @@ Adjust the following parameters by editing `config.json`:
 | `default_size` | Default output size (`256x256`/`512x512`/`1024x1024`/`1536x1024`/`1024x1536`/`1792x1024`/`1024x1792`/`auto`) | `1024x1024`                                      |
 
 
-Path behavior note: `config.json`, `chat_memory.json`, and `generated_images/` are all resolved relative to the current working directory where you run the command.
+Path behavior note: `config.json`, `chat_memory.json`, `generated_images/`, and `reference_images/` are all resolved relative to the current working directory where you run the command.
 Response compatibility note: the client supports both `data[].url` and `data[].b64_json`; when both are absent, generation is treated as failed.
 
 ## Project Structure
@@ -279,7 +277,8 @@ Response compatibility note: the client supports both `data[].url` and `data[].b
 ├── README.md                   # Project documentation (English)
 ├── config.json                 # Configuration file (auto-generated on first run)
 ├── chat_memory.json            # Conversation history (auto-generated)
-└── generated_images/           # Generated images (auto-created)
+├── generated_images/           # Generated images (auto-created)
+└── reference_images/           # Optional auto-reference import directory
 ```
 
 ## FAQ

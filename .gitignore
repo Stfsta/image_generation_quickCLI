@@ -3,7 +3,9 @@ config.json
 
 # Generated artifacts
 generated_images/
+reference_images/
 chat_memory.json
+docs/REPOSITORY_SNAPSHOT.md
 
 # Python
 __pycache__/
@@ -33,6 +35,7 @@ wheels/
 # IDE
 .vscode/
 .idea/
+.cursor/
 *.swp
 *.swo
 *~

@@ -12,6 +12,8 @@ from typing import Any
 from dataclasses import dataclass, asdict
 from threading import Lock
 
+from .i18n import text
+
 
 @dataclass
 class Message:
@@ -136,7 +138,7 @@ class HistoryManager:
                 del data[session_id]
                 self._atomic_write(data)
 
-    def build_context_prompt(self, user_input: str, session_id: str = "default") -> str:
+    def build_context_prompt(self, user_input: str, session_id: str = "default", language: str = "en") -> str:
         """
         Build a contextual prompt from session history and current input.
         Previous assistant outputs are summarized to reduce token usage.
@@ -149,8 +151,12 @@ class HistoryManager:
 
         context_parts = []
         for msg in history[:-1]:
-            content = "[Image generated / 已生成图片]" if msg.role == "assistant" else msg.content
+            content = text(language, "history_generated_placeholder") if msg.role == "assistant" else msg.content
             context_parts.append(f"{msg.role}: {content}")
 
         context_str = "\n".join(context_parts)
-        return f"Dialogue history / 对话历史:\n{context_str}\n\nLatest request / 最新要求: {user_input}"
+        return (
+            f"{text(language, 'history_dialogue_header')}\n"
+            f"{context_str}\n\n"
+            f"{text(language, 'history_latest_request', request=user_input)}"
+        )

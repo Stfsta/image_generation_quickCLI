@@ -48,3 +48,24 @@ def test_default_size_rejects_invalid_value(make_config_file):
     path = make_config_file({"default_size": "9999x9999"})
     with pytest.raises(ConfigValidationError):
         ConfigManager(path).load()
+
+
+def test_language_accepts_en_and_zh(make_config_file):
+    assert ConfigManager(make_config_file({"language": "en"})).load().language == "en"
+    assert ConfigManager(make_config_file({"language": "zh"})).load().language == "zh"
+
+
+def test_language_rejects_invalid_value(make_config_file):
+    path = make_config_file({"language": "jp"})
+    with pytest.raises(ConfigValidationError):
+        ConfigManager(path).load()
+
+
+def test_save_updates_persists_language(make_config_file):
+    path = make_config_file({"language": "en"})
+    manager = ConfigManager(path)
+    manager.load()
+    updated = manager.save_updates(language="zh")
+    reloaded = ConfigManager(path).load()
+    assert updated.language == "zh"
+    assert reloaded.language == "zh"

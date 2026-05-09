@@ -10,6 +10,7 @@ from typing import Any
 from .config import ConfigManager, ConfigSchema
 from .history import HistoryManager
 from .api_client import ImageAPIClient, GenerationResult, DownloadResult
+from .i18n import text
 
 
 class ImageGenerationService:
@@ -31,6 +32,15 @@ class ImageGenerationService:
         self._cfg: ConfigSchema | None = None
         self._history: HistoryManager | None = history_manager
         self._client: ImageAPIClient | None = api_client
+
+    @property
+    def language(self) -> str:
+        return self.config.language
+
+    def set_language(self, language: str) -> None:
+        self._cfg = self._config_manager.save_updates(language=language)
+        if self._client is not None:
+            self._client.set_language(self._cfg.language)
 
     def _parse_prompt(self, prompt: str) -> tuple[str, str | None, str | None]:
         """
@@ -58,8 +68,12 @@ class ImageGenerationService:
                 parsed_size = candidate_size
             else:
                 print(
-                    f"[Warning/警告] Unsupported size '{candidate_size}' / 不支持的尺寸 '{candidate_size}'. "
-                    f"Supported sizes / 支持的尺寸: {', '.join(sorted(self.ALLOWED_SIZES))}"
+                    text(
+                        self.language,
+                        "service_warn_invalid_size",
+                        size=candidate_size,
+                        allowed=", ".join(sorted(self.ALLOWED_SIZES)),
+                    )
                 )
             prompt = re.sub(size_pattern, '', prompt).strip()
         
@@ -96,24 +110,52 @@ class ImageGenerationService:
                 model=self.config.model,
                 timeout=self.config.timeout,
                 max_retries=self.config.max_retries,
-                retry_delay=self.config.retry_delay
+                retry_delay=self.config.retry_delay,
+                language=self.language,
             )
         return self._client
 
-    def _should_use_edits(self, reference_image: str) -> bool:
+    def _resolve_auto_reference_images(self) -> list[str]:
+        ref_dir = Path(self.config.reference_dir)
+        if not ref_dir.exists() or not ref_dir.is_dir():
+            return []
+        candidates = [
+            path for path in ref_dir.iterdir()
+            if path.is_file() and path.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"}
+        ]
+        if not candidates:
+            return []
+        sorted_candidates = sorted(candidates, key=lambda p: (p.stat().st_mtime, p.name))
+        resolved = [str(path) for path in sorted_candidates]
+        print(
+            text(
+                self.language,
+                "service_auto_ref_detected",
+                count=len(resolved),
+                directory=ref_dir.resolve(),
+            )
+        )
+        return resolved
+
+    def _should_use_edits(self, reference_images: list[str]) -> bool:
         """Decide whether local reference image can use edits endpoint.
         判断本地参考图是否可使用 edits 端点。"""
-        if reference_image.startswith(("http://", "https://")):
+        if not reference_images:
             return False
-        ref_path = Path(reference_image)
-        if not ref_path.exists() or not ref_path.is_file():
-            return False
-        if ref_path.suffix.lower() != ".png":
-            return False
-        try:
-            return ref_path.stat().st_size <= self.client.MAX_EDIT_IMAGE_BYTES
-        except OSError:
-            return False
+        for reference_image in reference_images:
+            if reference_image.startswith(("http://", "https://")):
+                return False
+            ref_path = Path(reference_image)
+            if not ref_path.exists() or not ref_path.is_file():
+                return False
+            if ref_path.suffix.lower() != ".png":
+                return False
+            try:
+                if ref_path.stat().st_size > self.client.MAX_EDIT_IMAGE_BYTES:
+                    return False
+            except OSError:
+                return False
+        return True
 
     def generate(
         self,
@@ -135,47 +177,61 @@ class ImageGenerationService:
         self.history.append(session_id, "user", user_prompt)
 
         parsed_prompt, parsed_image, parsed_size = self._parse_prompt(user_prompt)
-        ref_image = reference_image or parsed_image
+        resolved_ref: str | list[str] | None = reference_image or parsed_image
+        if not resolved_ref:
+            auto_refs = self._resolve_auto_reference_images()
+            if auto_refs:
+                resolved_ref = auto_refs
+
+        if isinstance(resolved_ref, str):
+            references = [resolved_ref]
+        elif isinstance(resolved_ref, list):
+            references = [ref for ref in resolved_ref if ref]
+        else:
+            references = []
+
         final_size = size or parsed_size or self.config.default_size
 
-        full_prompt = self.history.build_context_prompt(parsed_prompt, session_id)
+        full_prompt = self.history.build_context_prompt(parsed_prompt, session_id, self.language)
         truncated = full_prompt[:120] + "..." if len(full_prompt) > 120 else full_prompt
-        
-        if ref_image:
-            print(f"[Prompt/提示词] {truncated}")
-            print(f"[Reference/参考图] {ref_image}")
-        else:
-            print(f"[Prompt/提示词] {truncated}")
 
-        if ref_image and self._should_use_edits(ref_image):
+        if references:
+            print(text(self.language, "service_prompt", prompt=truncated))
+            if len(references) == 1:
+                print(text(self.language, "service_reference_single", reference=references[0]))
+            else:
+                print(text(self.language, "service_reference_multi", count=len(references)))
+        else:
+            print(text(self.language, "service_prompt", prompt=truncated))
+
+        if references and self._should_use_edits(references):
             gen_result: GenerationResult = self.client.edit(
                 prompt=full_prompt,
-                image_path=ref_image,
+                image_path=references if len(references) > 1 else references[0],
                 size=final_size,
                 n=n,
                 **extra_params,
             )
         else:
-            if ref_image and not ref_image.startswith(("http://", "https://")):
-                print("[Info/信息] Local reference is not PNG<=4MB, fallback to generations private image_url path.")
-                print("[Info/信息] 本地参考图不满足 PNG 且小于等于 4MB，已回退到 generations 私有 image_url 路径。")
+            if references and any(not ref.startswith(("http://", "https://")) for ref in references):
+                print(text(self.language, "service_info_fallback_to_generations"))
             gen_result = self.client.generate(
                 prompt=full_prompt,
                 size=final_size,
                 n=n,
-                reference_image=ref_image,
+                reference_image=references if len(references) > 1 else (references[0] if references else None),
                 **extra_params,
             )
 
         if not gen_result.success:
-            print(f"[Error/错误] {gen_result.error_message}")
-            self.history.append(session_id, "system", "图像生成失败 / Image generation failed")
+            print(text(self.language, "service_error", error=gen_result.error_message))
+            self.history.append(session_id, "system", text(self.language, "service_history_generation_failed"))
             return None
 
         if gen_result.usage:
             total_tokens = gen_result.usage.get("total_tokens")
             if total_tokens is not None:
-                print(f"[Usage/用量] total_tokens={total_tokens}")
+                print(text(self.language, "service_usage", tokens=total_tokens))
 
         image_dir = Path(self.config.image_dir)
         if gen_result.image_b64:
@@ -190,19 +246,19 @@ class ImageGenerationService:
             )
 
         if dl_result.success:
-            print(f"[Saved/已保存] {dl_result.filepath}")
-            self.history.append(session_id, "assistant", "图像已生成 / Image generated")
+            print(text(self.language, "service_saved", path=dl_result.filepath))
+            self.history.append(session_id, "assistant", text(self.language, "service_history_generated"))
             return dl_result.filepath
         else:
-            print(f"[Error/错误] {dl_result.error_message}")
-            self.history.append(session_id, "system", "图像下载失败 / Image download failed")
+            print(text(self.language, "service_error", error=dl_result.error_message))
+            self.history.append(session_id, "system", text(self.language, "service_history_download_failed"))
             return None
 
     def clear_history(self, session_id: str = "default") -> None:
         """Clear conversation history for a session.
         清空会话的对话历史。"""
         self.history.clear(session_id)
-        print(f"[Info/信息] Session '{session_id}' history cleared. / 会话 '{session_id}' 的历史记录已清空。")
+        print(text(self.language, "service_clear_history", session_id=session_id))
 
     def close(self) -> None:
         """Release all resources.

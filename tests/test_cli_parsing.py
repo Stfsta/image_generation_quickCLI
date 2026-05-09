@@ -5,7 +5,8 @@ from image_generator.cli import CLI
 
 class DummyService:
     def __init__(self):
-        self.config = SimpleNamespace(image_dir="generated_images")
+        self.config = SimpleNamespace(image_dir="generated_images", reference_dir="reference_images")
+        self.language = "en"
         self.calls = []
 
     def clear_history(self, session_id):
@@ -14,6 +15,10 @@ class DummyService:
     def generate(self, *args, **kwargs):
         self.calls.append(("generate", {"args": args, "kwargs": kwargs}))
         return "ok.png"
+
+    def set_language(self, language):
+        self.language = language
+        self.calls.append(("set_language", {"language": language}))
 
 
 def test_cli_ref_command_set_and_clear():
@@ -41,6 +46,15 @@ def test_cli_session_without_arg_shows_current_session(capsys):
     out = capsys.readouterr().out
     assert handled is True
     assert "Current session ID" in out
+
+
+def test_cli_language_switch_updates_service():
+    svc = DummyService()
+    cli = CLI(svc)
+    handled = cli._handle_command("lang zh")
+    assert handled is True
+    assert svc.language == "zh"
+    assert any(name == "set_language" for name, _ in svc.calls)
 
 
 def test_cli_prefers_inline_ref_over_session_ref(monkeypatch):
