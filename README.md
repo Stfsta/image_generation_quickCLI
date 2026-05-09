@@ -1,4 +1,4 @@
-# Suchuang API Image Generator (e.g. GPT-image-2) v2.0
+# Suchuang API Image Generator (e.g. GPT-image-2) v0.1.1
 
 A convenient image generation script based on the Suchuang API proxy station, supporting contextual conversation memory for iterative image refinement. Uses the `gpt-image-2` model, compatible with the OpenAI interface calling method.
 

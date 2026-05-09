@@ -42,8 +42,8 @@ class CLI:
     def _print_banner(self) -> None:
         image_dir = Path(self.service.config.image_dir)
         print("\n" + "=" * 60)
-        print("    Suchuang API Image Generator (gpt-image-2) v2.0")
-        print("    速创API 图像生成工具（gpt-image-2）v2.0")
+        print("    Suchuang API Image Generator (gpt-image-2) v0.1.1")
+        print("    速创API 图像生成工具（gpt-image-2）v0.1.1")
         print("=" * 60)
         print("Usage / 使用说明:")
         print("  - Type a prompt or command / 输入提示词或命令")
